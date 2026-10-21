@@ -436,6 +436,8 @@
         <button class="btn-sidebar" id="btnExportShare" style="display:none;background:rgba(16,185,129,.25);border:1px solid rgba(16,185,129,.5);color:#6ee7b7" onclick="openExportModal()">📤 &nbsp;Exportar para Chefe</button>
         <button class="btn-sidebar btn-slack-cfg" id="btnSlackCfg" style="display:none" onclick="openSlackConfig()">⚙️ &nbsp;Configurar Slack</button>
         <button class="btn-sidebar" id="btnDebug" style="display:none;background:rgba(245,158,11,.25);border:1px solid rgba(245,158,11,.5);color:#fcd34d" onclick="showDebug()">🔍 &nbsp;Diagnóstico</button>
+        <button class="btn-sidebar" style="background:rgba(99,102,241,.2);border:1px solid rgba(99,102,241,.4);color:#a5b4fc" onclick="exportBackup()" title="Baixa um .json com todos os dados salvos neste navegador">💾 &nbsp;Exportar Backup</button>
+        <button class="btn-sidebar" style="background:rgba(99,102,241,.2);border:1px solid rgba(99,102,241,.4);color:#a5b4fc" onclick="triggerImportBackup()" title="Restaura os dados a partir de um .json exportado antes">📥 &nbsp;Importar Backup</button>
         <button class="btn-sidebar btn-upload" onclick="triggerUpload()">📤 &nbsp;Atualizar arquivo</button>
         <button class="btn-sidebar btn-logout" onclick="doLogout()">↩ &nbsp;Sair</button>
         <input type="file" id="appFileInput" accept=".xlsx,.xls" style="display:none" onchange="onAppFileChange(this)">
@@ -452,8 +454,7 @@
 
       <!-- Hidden file inputs -->
       <input type="file" id="attachFileInput" accept=".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.docx,.doc" style="display:none" onchange="onAttachFileChange(this)">
-      <input type="file" id="calcFileInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="onCalcFileChange(this)">
-      <input type="file" id="comboFileInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="onComboFileChange(this)">
+      <input type="file" id="backupFileInput" accept=".json" style="display:none" onchange="onBackupFileChange(this)">
       <input type="file" id="opsNopsFileInput" accept=".xlsx,.xls" style="display:none" onchange="onOpsNopsFileChange(this)">
 
       <!-- Resumo Tab -->
@@ -956,11 +957,15 @@ const QUEUE_THRESHOLDS = {
   'SNPE': { group:'SEG', name:'Screening Estrangeiro',  levels:[3.10, 4.80, 6.50, 8.20] },
   'FDNG': { group:'SEG', name:'FD Nuguard',             levels:[2.99, 5.49, 6.59, 7.69] },
   // BAU – peso 40%
-  'EPF':  { group:'BAU', name:'EDD PF',                 levels:[7.60, 11.80, 16.00, 20.20] },
+  // Recalibrado out/2026 com base no range real observado no Horizon KYC (19-40 jobs/h).
+  // AJUSTAR se esses cortes não refletirem o que você considera LOW vs EXCELLENCE.
+  'EPF':  { group:'BAU', name:'EDD PF',                 levels:[22.00, 27.00, 32.00, 37.00] },
   'IRR':  { group:'BAU', name:'CPF / CNPJ Irregular',   levels:[16.90, 26.10, 35.30, 44.50] },
   'PJDC': { group:'BAU', name:'Docs Validation PJ',     levels:[11.10, 17.01, 23.01, 29.01] },
   'RV':   { group:'BAU', name:'Reativação de Conta PJ', levels:[4.60,  7.20,  9.80, 12.40] },
-  'CDD':  { group:'BAU', name:'CDD PJ',                 levels:[9.80, 15.20, 20.60, 26.00] },
+  // Recalibrado out/2026 com base no range real observado no Horizon KYC (20-72 jobs/h).
+  // AJUSTAR se esses cortes não refletirem o que você considera LOW vs EXCELLENCE.
+  'CDD':  { group:'BAU', name:'CDD PJ',                 levels:[30.00, 42.00, 54.00, 66.00] },
   'NGPJ': { group:'BAU', name:'Nuguard PJ',             levels:[2.99, 4.99, 5.99, 6.99] },
 };
 const PERF_LABELS = ['LOW PERFORMER','MEDIUM PERFORMER','HIGH PERFORMER','TOP PERFORMER','EXCELLENCE PERFORMER'];
@@ -1150,8 +1155,6 @@ function getCalcState(email) {
 }
 function saveCalcState(email, s) { localStorage.setItem('kyc_cs_'+email, JSON.stringify(s)); }
 
-let calcUploadTarget = null; // 1 or 2
-
 let charts = {};
 let currentViewEmail = null;
 let regFileData = null;
@@ -1164,6 +1167,54 @@ function saveUsers(u) { localStorage.setItem('kyc_users', JSON.stringify(u)); }
 function getSession() { try { return JSON.parse(localStorage.getItem('kyc_session')||'null'); } catch(e){return null;} }
 function setSession(s) { localStorage.setItem('kyc_session', JSON.stringify(s)); }
 function clearSession() { localStorage.removeItem('kyc_session'); }
+
+function exportBackup() {
+  const backup = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.indexOf('kyc_') === 0 && k !== 'kyc_session') backup[k] = localStorage.getItem(k);
+  }
+  const payload = { _meta: { app: 'kyc-performance-dashboard', exportedAt: new Date().toISOString() }, data: backup };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'kyc-backup-' + new Date().toISOString().slice(0,10) + '.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast('✓ Backup baixado — guarde esse arquivo em local seguro', 'top');
+}
+
+function triggerImportBackup() {
+  document.getElementById('backupFileInput').click();
+}
+
+function onBackupFileChange(input) {
+  if (!input.files[0]) return;
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const payload = JSON.parse(e.target.result);
+      const data = payload && payload.data ? payload.data : payload;
+      const keys = Object.keys(data||{}).filter(k => k.indexOf('kyc_') === 0);
+      if (!keys.length) { alert('Arquivo de backup inválido ou vazio.'); input.value=''; return; }
+      const ok = confirm(
+        'Importar este backup vai SUBSTITUIR os dados atuais deste navegador ' +
+        '(' + keys.length + ' chave(s): time, analistas, produtividade, qualidade, SLA).\n\n' +
+        'Deseja continuar?'
+      );
+      if (!ok) { input.value=''; return; }
+      keys.forEach(k => localStorage.setItem(k, data[k]));
+      alert('Backup importado com sucesso! A página vai recarregar.');
+      location.reload();
+    } catch(err) { alert('Erro ao importar backup: ' + err.message); }
+    input.value = '';
+  };
+  reader.readAsText(file);
+}
 function isCoordinator(email) { return COORDINATOR_EMAILS.includes((email||'').toLowerCase()); }
 
 function doLogin() {
@@ -3185,106 +3236,95 @@ function deleteParecer(email) {
   }
 }
 
-// ══════════════════════════════════════════
-//  CALC PANEL HANDLERS
-// ══════════════════════════════════════════
-function triggerCalcFile(num) {
-  calcUploadTarget = num;
-  document.getElementById('calcFileInput').click();
+// ════════════════════════════════════════════
+//  CALC PANEL HANDLERS (preenchimento manual por fila)
+// ════════════════════════════════════════════
+// Os dados de produtividade são digitados direto aqui, fila por fila
+// (Entregas / OCC em horas), espelhando a tela "Visão Analista → Entregas
+// por fila" do Horizon KYC. Dá pra atualizar quantas vezes quiser ao longo
+// do mês, conforme o analista for atuando — sem anexar nenhum arquivo.
+
+function getMonthRows(cs, month) {
+  return (cs.manualRowsByMonth && cs.manualRowsByMonth[month]) || [];
 }
 
-function onCalcFileChange(input) {
-  if (!input.files[0]) return;
-  const file = input.files[0];
-  const email = currentViewEmail || getSession()?.email;
-  const num = calcUploadTarget;
-  const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      const wb = XLSX.read(new Uint8Array(e.target.result), { type:'array' });
-      const cs = getCalcState(email);
-      if (num === 1) {
-        cs.hoursData = parseHoursFile(wb);
-        cs.hoursName = file.name;
-      } else {
-        cs.jobsData  = parseJobsFile(wb);
-        cs.jobsName  = file.name;
-      }
-      saveCalcState(email, cs);
-      renderCalcPanel(email);
-      // Auto-calculate when both files are loaded
-      if (cs.hoursData?.length && cs.jobsData?.length) {
-        setTimeout(() => applyCalcResult(email), 200);
-      }
-    } catch(err) { alert('Erro ao ler arquivo: ' + err.message); }
-    input.value = '';
-  };
-  reader.readAsArrayBuffer(file);
+function saveMonthRows(email, cs, month, rows) {
+  cs.manualRowsByMonth = cs.manualRowsByMonth || {};
+  cs.manualRowsByMonth[month] = rows;
+  saveCalcState(email, cs);
 }
 
-function triggerComboFile() {
-  document.getElementById('comboFileInput').click();
+function currentCalcMonth() {
+  const sel = document.getElementById('calcMonthSel');
+  return (sel?.value || _lastProdMonth || (() => {
+    const m = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO',
+      'JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
+    return m[new Date().getMonth()] + ' 2026';
+  })()).toUpperCase();
 }
 
-function onComboFileChange(input) {
-  if (!input.files[0]) return;
-  const file = input.files[0];
-  const email = currentViewEmail || getSession()?.email;
-  const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      const wb = XLSX.read(new Uint8Array(e.target.result), { type:'array' });
-      const parsed = parseProductivityCombined(wb);
-      if (!parsed) {
-        alert('Não encontrei as colunas Fila / Entregas (Jobs) / OCC (Horas) nesse arquivo. Confira o cabeçalho da planilha.');
-        input.value = '';
-        return;
-      }
-      const cs = getCalcState(email);
-      cs.hoursData = parsed.hoursData;
-      cs.jobsData  = parsed.jobsData;
-      cs.hoursName = file.name;
-      cs.jobsName  = file.name;
-      saveCalcState(email, cs);
-      renderCalcPanel(email);
-      if (parsed.naoReconhecidas.length) {
-        console.warn('Filas não reconhecidas (ignoradas no cálculo):', parsed.naoReconhecidas);
-      }
-      if (cs.hoursData?.length && cs.jobsData?.length) {
-        setTimeout(() => applyCalcResult(email), 200);
-      }
-    } catch(err) { alert('Erro ao ler arquivo: ' + err.message); }
-    input.value = '';
-  };
-  reader.readAsArrayBuffer(file);
-}
-
-function applyCalcResult(email) {
-  email = email || currentViewEmail || getSession()?.email;
-  const cs = getCalcState(email);
-  if (!cs.hoursData?.length || !cs.jobsData?.length) {
-    alert('Carregue os dois arquivos antes de calcular.'); return;
-  }
-  const _selEl = document.getElementById('calcMonthSel');
-  const month = (_selEl?.value || _lastProdMonth || 'MAIO 2026').toUpperCase();
+function addManualFilaRow(email) {
+  const sel = document.getElementById('addFilaSel');
+  const slot = sel?.value;
+  if (!slot) return;
+  const month = currentCalcMonth();
   _lastProdMonth = month;
-  const result = runProductivityCalc(cs.hoursData, cs.jobsData);
+  const cs = getCalcState(email);
+  const rows = getMonthRows(cs, month);
+  if (rows.some(r => r.slot === slot)) return;
+  rows.push({ slot, jobs:null, horas:null });
+  saveMonthRows(email, cs, month, rows);
+  renderCalcPanel(email);
+}
+
+function removeManualFilaRow(email, idx) {
+  const month = currentCalcMonth();
+  const cs = getCalcState(email);
+  const rows = getMonthRows(cs, month);
+  rows.splice(idx, 1);
+  saveMonthRows(email, cs, month, rows);
+  renderCalcPanel(email);
+}
+
+function updateManualRowField(email, idx, field, value) {
+  const month = currentCalcMonth();
+  const cs = getCalcState(email);
+  const rows = getMonthRows(cs, month);
+  if (!rows[idx]) return;
+  rows[idx][field] = value === '' ? null : parseNum(value);
+  saveMonthRows(email, cs, month, rows);
+  const row = rows[idx];
+  const resEl = document.getElementById('calcRowRes_'+idx);
+  const lvlEl = document.getElementById('calcRowLvl_'+idx);
+  if (row.jobs && row.horas) {
+    const resultado = row.jobs / row.horas;
+    const cls = classifyQueue(row.slot, resultado);
+    if (resEl) resEl.textContent = resultado.toFixed(2);
+    if (lvlEl) lvlEl.textContent = cls ? cls.level : '—';
+  } else {
+    if (resEl) resEl.textContent = '—';
+    if (lvlEl) lvlEl.textContent = '—';
+  }
+}
+
+function applyManualCalc(email) {
+  email = email || currentViewEmail || getSession()?.email;
+  const month = currentCalcMonth();
+  _lastProdMonth = month;
+  const cs = getCalcState(email);
+  const rows = getMonthRows(cs, month).filter(r => r.jobs && r.horas);
+  if (!rows.length) {
+    alert('Preencha Entregas e OCC (h) de pelo menos uma fila antes de calcular.');
+    return;
+  }
+  const hoursData = rows.map(r => ({ slot: r.slot, horas: r.horas }));
+  const jobsData  = rows.map(r => ({ slot: r.slot, jobs: r.jobs, descricao: QUEUE_THRESHOLDS[r.slot]?.name || r.slot }));
+  const result = runProductivityCalc(hoursData, jobsData);
   if (!result.queues.length) {
-    // Mostra diagnóstico para ajudar a identificar o problema
-    const hoursSlots = cs.hoursData.map(h=>h.slot).join(', ') || '(vazio)';
-    const jobsSlots  = cs.jobsData.map(j=>j.slot).join(', ')  || '(vazio)';
-    const known = Object.keys(QUEUE_THRESHOLDS).join(', ');
-    alert(
-      'Nenhuma fila reconhecida nos arquivos.\n\n' +
-      '📁 Slots encontrados no Arquivo 1 (Horas): ' + hoursSlots + '\n' +
-      '📁 Slots encontrados no Arquivo 2 (Jobs): ' + jobsSlots + '\n\n' +
-      'Slots reconhecidos pelo sistema:\n' + known + '\n\n' +
-      'Verifique se a coluna "Slot" ou "Fila" está correta no arquivo.'
-    );
+    alert('Nenhuma das filas preenchidas tem limiar cadastrado em QUEUE_THRESHOLDS.');
     return;
   }
 
-  // Save into analyst data
   const users = getUsers();
   if (!users[email]) return;
   if (!users[email].data) {
@@ -3294,7 +3334,6 @@ function applyCalcResult(email) {
   const d = users[email].data;
   const mes = month;
 
-  // Build productivity month entry
   d.productivity[mes] = {
     notaBau: result.notaBau,
     notaSegmento: result.notaSeg,
@@ -3310,30 +3349,20 @@ function applyCalcResult(email) {
     }))
   };
 
-  // Upsert monthly summary
   let mo = d.monthly.find(m=>m.mes===mes);
   if (!mo) { mo = { mes, produtividade:null, qualidade:null, sla:null, final:null, status:null }; d.monthly.push(mo); }
   mo.produtividade = result.total;
   autoUpdateFinal(d, mes);
 
   saveUsers(users);
-
-  // Limpa os arquivos do cache para o próximo mês (cada mês tem arquivos próprios)
-  saveCalcState(email, { hoursData:null, hoursName:null, jobsData:null, jobsName:null });
-
-  // Avança automaticamente para o próximo mês
-  const curIdx = MONTH_ORDER.indexOf(mes.split(' ')[0]);
-  if (curIdx >= 0 && curIdx < MONTH_ORDER.length - 1) {
-    _lastProdMonth = MONTH_ORDER[curIdx + 1] + ' 2026';
-  }
-
   renderDashboard();
 
   const ok = confirm(
-    `✅ Cálculo concluído para ${mes}!\n\n` +
+    `✅ Cálculo atualizado para ${mes}!\n\n` +
     `⚡ NOTA BAU (40%): ${result.notaBau.toFixed(2)}\n` +
     `⚡ NOTA SEGMENTO (60%): ${result.notaSeg.toFixed(2)}\n` +
     `📊 PRODUTIVIDADE TOTAL: ${result.total.toFixed(2)} — ${getProductivityLevel(result.total)}\n\n` +
+    `Você pode continuar atualizando os números durante o mês e recalcular quando quiser.\n\n` +
     `📄 Deseja gerar o relatório completo agora?`
   );
   if (ok) generateAnalystReport(email);
@@ -3347,23 +3376,43 @@ function getProductivityLevel(score) {
   return 'EXCELLENCE PERFORMER';
 }
 
-function toggleClassicCalcMode(ev) {
-  if (ev) ev.preventDefault();
-  const el = document.getElementById('classicCalcZone');
-  if (!el) return;
-  el.style.display = (el.style.display === 'none' || !el.style.display) ? 'block' : 'none';
-}
-
 function renderCalcPanel(email) {
   const container = document.getElementById('calcPanelContainer');
   if (!container) return;
   const cs = getCalcState(email);
-  const has1 = !!cs.hoursData?.length;
-  const has2 = !!cs.jobsData?.length;
 
   const monthOpts = MONTH_ORDER.map(m =>
     `<option value="${m} 2026">${m.charAt(0)+m.slice(1).toLowerCase()} 2026</option>`
   ).join('');
+
+  const month = currentCalcMonth();
+  const rows = getMonthRows(cs, month);
+
+  const addOpts = '<option value="">+ selecione uma fila…</option>' + Object.entries(QUEUE_THRESHOLDS)
+    .filter(([slot]) => !rows.some(r => r.slot === slot))
+    .sort((a,b) => a[1].name.localeCompare(b[1].name))
+    .map(([slot, t]) => `<option value="${slot}">${t.name} (${slot})</option>`)
+    .join('');
+
+  const rowsHtml = rows.length ? rows.map((r, idx) => {
+    const t = QUEUE_THRESHOLDS[r.slot];
+    const resultado = (r.jobs && r.horas) ? r.jobs / r.horas : null;
+    const cls = resultado ? classifyQueue(r.slot, resultado) : null;
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:6px 8px">${t?.name || r.slot} <span style="color:var(--muted);font-size:11px">(${r.slot})</span></td>
+      <td style="padding:6px 8px"><input type="number" min="0" step="1" value="${r.jobs ?? ''}" placeholder="0"
+        style="width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:6px"
+        oninput="updateManualRowField(currentViewEmail||getSession()?.email, ${idx}, 'jobs', this.value)"></td>
+      <td style="padding:6px 8px"><input type="number" min="0" step="0.1" value="${r.horas ?? ''}" placeholder="0"
+        style="width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:6px"
+        oninput="updateManualRowField(currentViewEmail||getSession()?.email, ${idx}, 'horas', this.value)"></td>
+      <td style="padding:6px 8px" id="calcRowRes_${idx}">${resultado ? resultado.toFixed(2) : '—'}</td>
+      <td style="padding:6px 8px" id="calcRowLvl_${idx}">${cls ? cls.level : '—'}</td>
+      <td style="padding:6px 8px"><button title="Remover fila"
+        style="background:none;border:none;color:var(--low);cursor:pointer;font-size:14px"
+        onclick="removeManualFilaRow(currentViewEmail||getSession()?.email, ${idx})">✕</button></td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:16px">Nenhuma fila adicionada ainda. Use o seletor abaixo para incluir as filas em que o analista está atuando.</td></tr>`;
 
   container.innerHTML = `
     <div class="calc-panel">
@@ -3372,51 +3421,38 @@ function renderCalcPanel(email) {
         <label>Mês de referência:</label>
         <select id="calcMonthSel">${monthOpts}</select>
       </div>
-      <div class="calc-files">
-        <div class="calc-file-zone ${has1&&has2?'loaded':''}" onclick="triggerComboFile()" style="grid-column:1 / -1">
-          <div class="zone-icon">${has1&&has2?'✅':'📁'}</div>
-          <div class="zone-title">Arquivo único — Fila / Entregas / OCC (h)</div>
-          <div class="zone-sub">Exporte direto da tela "Visão Analista → Entregas por fila" do Horizon KYC. Pode subir quantas vezes quiser durante o mês — cada upload recalcula com os dados mais recentes (resultado parcial até o mês fechar).</div>
-          ${has1&&has2?`<div class="zone-name">✓ ${cs.hoursName}</div>`:'<div class="zone-sub" style="margin-top:4px">Clique para selecionar</div>'}
-        </div>
+      <div style="font-size:11px;color:var(--muted);margin:-4px 0 10px">
+        Preencha os números direto aqui, conforme o analista for atuando nas filas (dados do Horizon KYC → "Visão Analista → Entregas por fila"). Pode atualizar quantas vezes quiser durante o mês — o resultado reflete o acumulado até agora.
       </div>
-      <button class="btn-calc" ${has1&&has2?'':'disabled'} onclick="applyCalcResult(currentViewEmail||getSession()?.email)">
-        ⚡ Calcular e Gerar Relatório
+      <table style="width:100%;border-collapse:collapse;margin:10px 0">
+        <thead>
+          <tr style="text-align:left;font-size:11px;color:var(--muted);border-bottom:1px solid var(--border)">
+            <th style="padding:6px 8px">Fila</th>
+            <th style="padding:6px 8px">Entregas</th>
+            <th style="padding:6px 8px">OCC (h)</th>
+            <th style="padding:6px 8px">Jobs/h</th>
+            <th style="padding:6px 8px">Nível</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div style="display:flex;gap:8px;align-items:center;margin:10px 0">
+        <select id="addFilaSel" style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:6px">${addOpts}</select>
+        <button class="btn-sidebar" style="padding:6px 14px;width:auto" onclick="addManualFilaRow(currentViewEmail||getSession()?.email)">+ Adicionar fila</button>
+      </div>
+      <button class="btn-calc" ${rows.length?'':'disabled'} onclick="applyManualCalc(currentViewEmail||getSession()?.email)">
+        ⚡ Calcular e Atualizar
       </button>
-      ${has1&&has2?'<span style="font-size:11px;color:var(--top);margin-left:12px">✓ Dados carregados — recalcule quando quiser, quantas vezes precisar</span>':'<span style="font-size:11px;color:var(--muted);margin-left:12px">Carregue o arquivo para calcular</span>'}
-
-      <div style="margin-top:12px">
-        <a href="#" onclick="toggleClassicCalcMode(event)" style="font-size:11px;color:var(--muted);text-decoration:underline">Usar modo clássico (2 arquivos separados)</a>
-        <div id="classicCalcZone" style="display:none;margin-top:10px">
-          <div class="calc-files">
-            <div class="calc-file-zone ${has1?'loaded':''}" onclick="triggerCalcFile(1)">
-              <div class="zone-icon">${has1?'✅':'📁'}</div>
-              <div class="zone-title">Arquivo 1 — Filas &amp; Horas</div>
-              <div class="zone-sub">Colunas: Slot / Horas dimensionadas</div>
-              ${has1?`<div class="zone-name">✓ ${cs.hoursName}</div>`:'<div class="zone-sub" style="margin-top:4px">Clique para selecionar</div>'}
-            </div>
-            <div class="calc-file-zone ${has2?'loaded':''}" onclick="triggerCalcFile(2)">
-              <div class="zone-icon">${has2?'✅':'📁'}</div>
-              <div class="zone-title">Arquivo 2 — Jobs por Fila</div>
-              <div class="zone-sub">Colunas: Descrição / Slot / Qnt Jobs</div>
-              ${has2?`<div class="zone-name">✓ ${cs.jobsName}</div>`:'<div class="zone-sub" style="margin-top:4px">Clique para selecionar</div>'}
-            </div>
-          </div>
-        </div>
-      </div>
     </div>`;
 
-  // Set month to current (April 2026 default)
   const sel = document.getElementById('calcMonthSel');
   if (sel) {
-    // Usa o último mês selecionado ou o mês atual
-    const defaultMes = _lastProdMonth || (() => {
-      const m = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO',
-        'JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
-      return m[new Date().getMonth()] + ' 2026';
-    })();
-    sel.value = defaultMes;
-    sel.addEventListener('change', function() { _lastProdMonth = this.value.toUpperCase(); });
+    sel.value = month;
+    sel.addEventListener('change', function() {
+      _lastProdMonth = this.value.toUpperCase();
+      renderCalcPanel(email);
+    });
   }
 }
 
