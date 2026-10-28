@@ -433,6 +433,7 @@
 
       <div class="sidebar-footer">
         <button class="btn-sidebar btn-add-an" id="btnAddAnalyst" style="display:none" onclick="openAddAnalyst()">＋ &nbsp;Incluir Analista</button>
+        <button class="btn-sidebar" id="btnCalcAll" style="display:none;background:rgba(5,150,105,.25);border:1px solid rgba(5,150,105,.5);color:#6ee7b7" onclick="applyManualCalcAll()" title="Recalcula a Produtividade de todos os analistas que já têm filas preenchidas no mês atual, de uma vez só">⚡ &nbsp;Atualizar Todos</button>
         <button class="btn-sidebar" id="btnExportShare" style="display:none;background:rgba(16,185,129,.25);border:1px solid rgba(16,185,129,.5);color:#6ee7b7" onclick="openExportModal()">📤 &nbsp;Exportar para Chefe</button>
         <button class="btn-sidebar btn-slack-cfg" id="btnSlackCfg" style="display:none" onclick="openSlackConfig()">⚙️ &nbsp;Configurar Slack</button>
         <button class="btn-sidebar" id="btnDebug" style="display:none;background:rgba(245,158,11,.25);border:1px solid rgba(245,158,11,.5);color:#fcd34d" onclick="showDebug()">🔍 &nbsp;Diagnóstico</button>
@@ -2135,6 +2136,8 @@ function renderDashboard() {
   if (btnSlk) btnSlk.style.display = isCoord ? 'flex' : 'none';
   const btnExp = document.getElementById('btnExportShare');
   if (btnExp) btnExp.style.display = isCoord ? 'flex' : 'none';
+  const btnCalcAll = document.getElementById('btnCalcAll');
+  if (btnCalcAll) btnCalcAll.style.display = isCoord ? 'flex' : 'none';
   const navPonto = document.getElementById('navPonto');
   if (navPonto) navPonto.style.display = isCoord ? '' : 'none';
   const navConsolidado = document.getElementById('navConsolidado');
@@ -3311,26 +3314,20 @@ function updateManualRowField(email, idx, field, value) {
   }
 }
 
-function applyManualCalc(email) {
-  email = email || currentViewEmail || getSession()?.email;
-  const month = currentCalcMonth();
-  _lastProdMonth = month;
-  const cs = getCalcState(email);
-  const rows = getMonthRows(cs, month).filter(r => r.jobs && r.horas);
-  if (!rows.length) {
-    alert('Preencha Entregas e OCC (h) de pelo menos uma fila antes de calcular.');
-    return;
-  }
+// Núcleo compartilhado: calcula a produtividade a partir das filas preenchidas
+// e grava no analista indicado. Usado tanto pelo cálculo individual quanto
+// pelo "Atualizar Todos". Não mexe em alert/confirm nem em renderDashboard —
+// isso fica a cargo de quem chama, para permitir rodar em lote sem popups repetidos.
+function computeAndSaveProductivity(email, month, rows) {
+  if (!rows.length) return null;
   const hoursData = rows.map(r => ({ slot: r.slot, horas: r.horas }));
   const jobsData  = rows.map(r => ({ slot: r.slot, jobs: r.jobs, descricao: QUEUE_THRESHOLDS[r.slot]?.name || r.slot }));
   const result = runProductivityCalc(hoursData, jobsData);
-  if (!result.queues.length) {
-    alert('Nenhuma das filas preenchidas tem limiar cadastrado em QUEUE_THRESHOLDS.');
-    return;
-  }
+  if (!result.queues.length) return null;
 
+  // Save into analyst data
   const users = getUsers();
-  if (!users[email]) return;
+  if (!users[email]) return null;
   if (!users[email].data) {
     users[email].data = { monthly:[], productivity:{}, quality:{}, sla:[],
       analystName: users[email].predefinedName||'', email:email, team:'', coordinator:'' };
@@ -3338,6 +3335,7 @@ function applyManualCalc(email) {
   const d = users[email].data;
   const mes = month;
 
+  // Build productivity month entry
   d.productivity[mes] = {
     notaBau: result.notaBau,
     notaSegmento: result.notaSeg,
@@ -3353,16 +3351,38 @@ function applyManualCalc(email) {
     }))
   };
 
+  // Upsert monthly summary
   let mo = d.monthly.find(m=>m.mes===mes);
   if (!mo) { mo = { mes, produtividade:null, qualidade:null, sla:null, final:null, status:null }; d.monthly.push(mo); }
   mo.produtividade = result.total;
   autoUpdateFinal(d, mes);
 
   saveUsers(users);
+  return result;
+}
+
+function applyManualCalc(email) {
+  email = email || currentViewEmail || getSession()?.email;
+  const month = currentCalcMonth();
+  _lastProdMonth = month;
+  const cs = getCalcState(email);
+  const rows = getMonthRows(cs, month).filter(r => r.jobs && r.horas);
+  if (!rows.length) {
+    alert('Preencha Entregas e OCC (h) de pelo menos uma fila antes de calcular.');
+    return;
+  }
+  const result = computeAndSaveProductivity(email, month, rows);
+  if (!result) {
+    alert('Nenhuma das filas preenchidas tem limiar cadastrado em QUEUE_THRESHOLDS.');
+    return;
+  }
+
+  // Não limpa as filas preenchidas: o coordenador pode continuar ajustando
+  // os números deste mesmo mês conforme o analista for atuando.
   renderDashboard();
 
   const ok = confirm(
-    `✅ Cálculo atualizado para ${mes}!\n\n` +
+    `✅ Cálculo atualizado para ${month}!\n\n` +
     `⚡ NOTA BAU (40%): ${result.notaBau.toFixed(2)}\n` +
     `⚡ NOTA SEGMENTO (60%): ${result.notaSeg.toFixed(2)}\n` +
     `📊 PRODUTIVIDADE TOTAL: ${result.total.toFixed(2)} — ${getProductivityLevel(result.total)}\n\n` +
@@ -3370,6 +3390,39 @@ function applyManualCalc(email) {
     `📄 Deseja gerar o relatório completo agora?`
   );
   if (ok) generateAnalystReport(email);
+}
+
+// Roda o mesmo cálculo de cima para TODOS os analistas ativos de uma vez só,
+// no mês selecionado (ou no mês corrente). Pula silenciosamente quem ainda
+// não tem nenhuma fila preenchida nesse mês, e lista isso no resumo final —
+// não precisa mais abrir analista por analista para recalcular.
+function applyManualCalcAll() {
+  const month = currentCalcMonth();
+  _lastProdMonth = month;
+  const list = activeAnalysts();
+  const updated = [];
+  const skipped = [];
+
+  list.forEach(({ name, email }) => {
+    const key = email.toLowerCase();
+    const cs = getCalcState(key);
+    const rows = getMonthRows(cs, month).filter(r => r.jobs && r.horas);
+    if (!rows.length) { skipped.push(name); return; }
+    const result = computeAndSaveProductivity(key, month, rows);
+    if (!result) { skipped.push(name); return; }
+    updated.push(`${name}: ${result.total.toFixed(2)} — ${getProductivityLevel(result.total)}`);
+  });
+
+  renderDashboard();
+
+  let msg = `✅ Produtividade de ${month} recalculada!\n\n`;
+  msg += updated.length
+    ? `Atualizados (${updated.length}):\n` + updated.map(l => '• ' + l).join('\n')
+    : 'Nenhum analista tinha filas preenchidas para este mês.';
+  if (skipped.length) {
+    msg += `\n\nSem filas preenchidas neste mês (ignorados): ${skipped.join(', ')}`;
+  }
+  alert(msg);
 }
 
 function getProductivityLevel(score) {
