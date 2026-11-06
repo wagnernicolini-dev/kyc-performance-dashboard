@@ -958,15 +958,15 @@ const QUEUE_THRESHOLDS = {
   'SNPE': { group:'SEG', name:'Screening Estrangeiro',  levels:[3.10, 4.80, 6.50, 8.20] },
   'FDNG': { group:'SEG', name:'FD Nuguard',             levels:[2.99, 5.49, 6.59, 7.69] },
   // BAU – peso 40%
-  // Recalibrado out/2026 com base no range real observado no Horizon KYC (19-40 jobs/h).
-  // AJUSTAR se esses cortes não refletirem o que você considera LOW vs EXCELLENCE.
-  'EPF':  { group:'BAU', name:'EDD PF',                 levels:[22.00, 27.00, 32.00, 37.00] },
+  // Tabela oficial EDD PF (EPF) confirmada pelo Wagner em nov/2026:
+  // LOW <7.60 | MEDIUM 7.61–11.80 | HIGH 11.81–16.00 | TOP 16.01–20.20 | EXCELLENCE >20.21
+  'EPF':  { group:'BAU', name:'EDD PF',                 levels:[7.60, 11.80, 16.00, 20.20] },
   'IRR':  { group:'BAU', name:'CPF / CNPJ Irregular',   levels:[16.90, 26.10, 35.30, 44.50] },
   'PJDC': { group:'BAU', name:'Docs Validation PJ',     levels:[11.10, 17.01, 23.01, 29.01] },
   'RV':   { group:'BAU', name:'Reativação de Conta PJ', levels:[4.60,  7.20,  9.80, 12.40] },
-  // Recalibrado out/2026 com base no range real observado no Horizon KYC (20-72 jobs/h).
-  // AJUSTAR se esses cortes não refletirem o que você considera LOW vs EXCELLENCE.
-  'CDD':  { group:'BAU', name:'CDD PJ',                 levels:[30.00, 42.00, 54.00, 66.00] },
+  // Tabela oficial CDD PJ confirmada pelo Wagner em nov/2026:
+  // LOW <9.80 | MEDIUM 9.81–15.20 | HIGH 15.21–20.60 | TOP 20.61–26.00 | EXCELLENCE >26
+  'CDD':  { group:'BAU', name:'CDD PJ',                 levels:[9.80, 15.20, 20.60, 26.00] },
   'NGPJ': { group:'BAU', name:'Nuguard PJ',             levels:[2.99, 4.99, 5.99, 6.99] },
 };
 const PERF_LABELS = ['LOW PERFORMER','MEDIUM PERFORMER','HIGH PERFORMER','TOP PERFORMER','EXCELLENCE PERFORMER'];
