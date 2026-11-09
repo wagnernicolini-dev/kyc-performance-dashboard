@@ -755,6 +755,10 @@
       <input type="text" id="profileAdmissao" placeholder="DD/MM/AAAA"
         style="width:100%;padding:10px 14px;border:1.5px solid #e2d9f3;border-radius:8px;font-size:14px;outline:none">
       <span style="font-size:11px;color:#9ca3af">Formato: 01/03/2022</span></div>
+    <div class="field" style="margin-top:12px"><label style="display:block;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Data de Entrada na Área de AML</label>
+      <input type="text" id="profileEntradaAml" placeholder="DD/MM/AAAA"
+        style="width:100%;padding:10px 14px;border:1.5px solid #e2d9f3;border-radius:8px;font-size:14px;outline:none">
+      <span style="font-size:11px;color:#9ca3af">Formato: 01/03/2023</span></div>
     <div id="profileEditErr" style="color:#dc2626;font-size:12px;margin-top:6px;min-height:16px"></div>
     <div style="display:flex;gap:10px;margin-top:20px">
       <button onclick="document.getElementById('profileEditModal').style.display='none'"
@@ -2493,6 +2497,24 @@ function renderResumo(d) {
       }
     }
   }
+  const _entradaAml = _uProfile?.entradaAml || d.entradaAml || '';
+  let   _amlStr = '';
+  if (_entradaAml) {
+    const ep = _entradaAml.split('/');
+    if (ep.length === 3) {
+      const ed = new Date(+ep[2], +ep[1]-1, +ep[0]);
+      const nw = new Date();
+      let mths = (nw.getFullYear() - ed.getFullYear()) * 12 + (nw.getMonth() - ed.getMonth());
+      if (nw.getDate() < ed.getDate()) mths--;
+      if (mths >= 0) {
+        const yy = Math.floor(mths / 12), mm = mths % 12;
+        const pp = [];
+        if (yy) pp.push(`${yy} ${yy === 1 ? 'ano' : 'anos'}`);
+        if (mm || !yy) pp.push(`${mm} ${mm === 1 ? 'mês' : 'meses'}`);
+        _amlStr = ` · ${pp.join(' e ')} em AML`;
+      }
+    }
+  }
   html += `<div style="background:#fff;border-radius:12px;border:1px solid var(--border);padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
     <div style="flex:1;min-width:200px">
       <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Cargo</div>
@@ -2505,6 +2527,10 @@ function renderResumo(d) {
     <div style="flex:1;min-width:200px">
       <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Data de Admissão</div>
       <div style="font-size:14px;font-weight:700;color:var(--text)">${_admissao ? _admissao + _tenureStr : '<span style="color:#d1d5db">–</span>'}</div>
+    </div>
+    <div style="flex:1;min-width:200px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Entrada na Área de AML</div>
+      <div style="font-size:14px;font-weight:700;color:var(--text)">${_entradaAml ? _entradaAml + _amlStr : '<span style="color:#d1d5db">–</span>'}</div>
     </div>
     <button onclick="openProfileEdit('${_resumoEmail}')"
       style="padding:7px 14px;background:var(--purple-light);color:var(--purple);border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0">
@@ -7692,6 +7718,7 @@ function openProfileEdit(email) {
   document.getElementById('profileCargo').value      = u?.cargo || u?.data?.cargo || '';
   document.getElementById('profileNascimento').value = u?.nascimento || u?.data?.nascimento || '';
   document.getElementById('profileAdmissao').value   = u?.admissao || u?.data?.admissao || '';
+  document.getElementById('profileEntradaAml').value = u?.entradaAml || u?.data?.entradaAml || '';
   document.getElementById('profileEditErr').textContent = '';
   document.getElementById('profileEditModal').style.display = 'flex';
 }
@@ -7701,9 +7728,13 @@ function saveProfileEdit() {
   const cargo = document.getElementById('profileCargo')?.value.trim() || '';
   const nasc  = document.getElementById('profileNascimento')?.value.trim() || '';
   const adm   = document.getElementById('profileAdmissao')?.value.trim() || '';
+  const aml   = document.getElementById('profileEntradaAml')?.value.trim() || '';
   const err   = document.getElementById('profileEditErr');
 
   // Validate date format if provided
+  if (aml && !/^\d{2}\/\d{2}\/\d{4}$/.test(aml)) {
+    err.textContent = 'Data de entrada em AML inválida. Use o formato DD/MM/AAAA.'; return;
+  }
   if (nasc && !/^\d{2}\/\d{2}\/\d{4}$/.test(nasc)) {
     err.textContent = 'Data de nascimento inválida. Use o formato DD/MM/AAAA.'; return;
   }
@@ -7716,10 +7747,12 @@ function saveProfileEdit() {
   users[email].cargo      = cargo;
   users[email].nascimento = nasc;
   users[email].admissao   = adm;
+  users[email].entradaAml = aml;
   if (users[email].data) {
     users[email].data.cargo      = cargo;
     users[email].data.nascimento = nasc;
     users[email].data.admissao   = adm;
+    users[email].data.entradaAml = aml;
   }
   saveUsers(users);
   document.getElementById('profileEditModal').style.display = 'none';
