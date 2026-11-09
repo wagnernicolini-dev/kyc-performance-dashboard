@@ -751,6 +751,10 @@
       <input type="text" id="profileNascimento" placeholder="DD/MM/AAAA"
         style="width:100%;padding:10px 14px;border:1.5px solid #e2d9f3;border-radius:8px;font-size:14px;outline:none">
       <span style="font-size:11px;color:#9ca3af">Formato: 15/06/1995</span></div>
+    <div class="field" style="margin-top:12px"><label style="display:block;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Data de Admissão</label>
+      <input type="text" id="profileAdmissao" placeholder="DD/MM/AAAA"
+        style="width:100%;padding:10px 14px;border:1.5px solid #e2d9f3;border-radius:8px;font-size:14px;outline:none">
+      <span style="font-size:11px;color:#9ca3af">Formato: 01/03/2022</span></div>
     <div id="profileEditErr" style="color:#dc2626;font-size:12px;margin-top:6px;min-height:16px"></div>
     <div style="display:flex;gap:10px;margin-top:20px">
       <button onclick="document.getElementById('profileEditModal').style.display='none'"
@@ -2471,6 +2475,24 @@ function renderResumo(d) {
       _ageStr = ` · ${age} anos`;
     }
   }
+  const _admissao = _uProfile?.admissao || d.admissao || '';
+  let   _tenureStr = '';
+  if (_admissao) {
+    const ap = _admissao.split('/');
+    if (ap.length === 3) {
+      const adm = new Date(+ap[2], +ap[1]-1, +ap[0]);
+      const now = new Date();
+      let months = (now.getFullYear() - adm.getFullYear()) * 12 + (now.getMonth() - adm.getMonth());
+      if (now.getDate() < adm.getDate()) months--;
+      if (months >= 0) {
+        const y = Math.floor(months / 12), mo = months % 12;
+        const parts2 = [];
+        if (y) parts2.push(`${y} ${y === 1 ? 'ano' : 'anos'}`);
+        if (mo || !y) parts2.push(`${mo} ${mo === 1 ? 'mês' : 'meses'}`);
+        _tenureStr = ` · ${parts2.join(' e ')} de casa`;
+      }
+    }
+  }
   html += `<div style="background:#fff;border-radius:12px;border:1px solid var(--border);padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
     <div style="flex:1;min-width:200px">
       <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Cargo</div>
@@ -2479,6 +2501,10 @@ function renderResumo(d) {
     <div style="flex:1;min-width:200px">
       <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Data de Nascimento</div>
       <div style="font-size:14px;font-weight:700;color:var(--text)">${_nascimento ? _nascimento + _ageStr : '<span style="color:#d1d5db">–</span>'}</div>
+    </div>
+    <div style="flex:1;min-width:200px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Data de Admissão</div>
+      <div style="font-size:14px;font-weight:700;color:var(--text)">${_admissao ? _admissao + _tenureStr : '<span style="color:#d1d5db">–</span>'}</div>
     </div>
     <button onclick="openProfileEdit('${_resumoEmail}')"
       style="padding:7px 14px;background:var(--purple-light);color:var(--purple);border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0">
@@ -7665,6 +7691,7 @@ function openProfileEdit(email) {
   document.getElementById('profileEditLabel').textContent = u?.predefinedName || u?.data?.analystName || email;
   document.getElementById('profileCargo').value      = u?.cargo || u?.data?.cargo || '';
   document.getElementById('profileNascimento').value = u?.nascimento || u?.data?.nascimento || '';
+  document.getElementById('profileAdmissao').value   = u?.admissao || u?.data?.admissao || '';
   document.getElementById('profileEditErr').textContent = '';
   document.getElementById('profileEditModal').style.display = 'flex';
 }
@@ -7673,20 +7700,26 @@ function saveProfileEdit() {
   const email = currentViewEmail || getSession()?.email;
   const cargo = document.getElementById('profileCargo')?.value.trim() || '';
   const nasc  = document.getElementById('profileNascimento')?.value.trim() || '';
+  const adm   = document.getElementById('profileAdmissao')?.value.trim() || '';
   const err   = document.getElementById('profileEditErr');
 
   // Validate date format if provided
   if (nasc && !/^\d{2}\/\d{2}\/\d{4}$/.test(nasc)) {
-    err.textContent = 'Data inválida. Use o formato DD/MM/AAAA.'; return;
+    err.textContent = 'Data de nascimento inválida. Use o formato DD/MM/AAAA.'; return;
+  }
+  if (adm && !/^\d{2}\/\d{2}\/\d{4}$/.test(adm)) {
+    err.textContent = 'Data de admissão inválida. Use o formato DD/MM/AAAA.'; return;
   }
 
   const users = getUsers();
   if (!users[email]) return;
   users[email].cargo      = cargo;
   users[email].nascimento = nasc;
+  users[email].admissao   = adm;
   if (users[email].data) {
     users[email].data.cargo      = cargo;
     users[email].data.nascimento = nasc;
+    users[email].data.admissao   = adm;
   }
   saveUsers(users);
   document.getElementById('profileEditModal').style.display = 'none';
