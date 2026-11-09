@@ -3665,6 +3665,20 @@ function saveOpsNopsData(email,data){ localStorage.setItem(getOpsNopsKey(email),
 
 let _opsNopsEmail=null, _opsNopsSelectedMonth={}, _opsNopsCharts={}, _opsNopsRefMes=null;
 
+// Meses marcados no painel. Vazio = importa todos os meses do arquivo
+// (ou o mês corrente, se o arquivo não tiver coluna "Mês").
+let _opsNopsSelMonths=[];
+function getOpsNopsSelMonths(){ return _opsNopsSelMonths||[]; }
+function opsNopsMonthKey(s){ return (s||'').toString().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().split(/[\s\/\-]+/)[0].slice(0,3); }
+function toggleOpsNopsMonth(m,checked){
+  const cur=new Set(getOpsNopsSelMonths());
+  if(checked) cur.add(m); else cur.delete(m);
+  _opsNopsSelMonths=MONTH_ORDER.map(x=>x+' 2026').filter(x=>cur.has(x));
+}
+function setAllOpsNopsMonths(all){
+  _opsNopsSelMonths=all?MONTH_ORDER.map(x=>x+' 2026'):[];
+  renderOpsNopsPanel(_opsNopsEmail||currentViewEmail||getSession()?.email);
+}
 function openOpsNopsUpload(email){ _opsNopsEmail=email; document.getElementById('opsNopsFileInput').click(); }
 function clearOpsNopsData(email){
   if(!confirm('Excluir todos os dados Ops/Não-Ops deste analista?')) return;
@@ -3678,7 +3692,9 @@ function onOpsNopsFileChange(input,emailArg){
   const file=input.files[0];
   const reader=new FileReader();
   reader.onload=e=>{
-    const refMes=(document.getElementById('opsNopsMonthSel')?.value)||_opsNopsRefMes||(MONTH_ORDER[new Date().getMonth()]+' 2026');
+    const selM=getOpsNopsSelMonths();
+    // refMes = mês destino quando o arquivo não tem coluna "Mês" (null = ambíguo, vários marcados)
+    const refMes=selM.length===1?selM[0]:(selM.length===0?(MONTH_ORDER[new Date().getMonth()]+' 2026'):null);
     const uint8=new Uint8Array(e.target.result);
     try{
       const wb=XLSX.read(uint8,{type:'array'});
@@ -3692,6 +3708,7 @@ function onOpsNopsFileChange(input,emailArg){
       const iMes=hdrs.findIndex(h=>h.startsWith('m')),iAna=hdrs.findIndex(h=>h.startsWith('anal'));
       const iFila=hdrs.findIndex(h=>h.startsWith('fila')),iHora=hdrs.findIndex(h=>h.startsWith('hora'));
       if(iFila<0||iHora<0){alert('Formato inválido. Precisa de colunas "Fila" e "Horas".');input.value='';return;}
+      if(iMes<0&&refMes===null){alert('Este arquivo não tem coluna "Mês", então só dá para importar para um mês por vez.\nMarque apenas um mês e tente de novo.');input.value='';return;}
       // Build analyst match function: accepts email exact match OR name derived from email prefix
       const emailLower=email.toLowerCase();
       const namePart=emailLower.split('@')[0].replace(/\./g,' '); // "leticia fonseca" from "leticia.fonseca@..."
@@ -3707,6 +3724,8 @@ function onOpsNopsFileChange(input,emailArg){
           if(filterAna&&iAna>=0&&!anaMatch(row[iAna])) continue;
           const fila=(row[iFila]||'').toString().trim(),horas=parseFloat(row[iHora])||0;
           const mes=iMes>=0?(row[iMes]||'').toString().trim()||refMes:refMes;
+          if(!mes) continue;
+          if(iMes>=0&&selM.length&&!selM.some(s=>opsNopsMonthKey(s)===opsNopsMonthKey(mes))) continue;
           if(!fila||fila==='Total de Horas'||fila==='Total') continue;
           if(!raw[mes]) raw[mes]={};
           if(!raw[mes][fila]) raw[mes][fila]={fila,horas:0,categoria:classif[fila]||'Não classificada'};
@@ -3744,13 +3763,21 @@ function renderOpsNopsPanel(email){
   const hasData=!!(data&&Object.keys(data.months||{}).length);
   const nMeses=hasData?Object.keys(data.months).length:0;
   const fname=hasData?(data.fileName||'arquivo carregado'):'';
-  const monthOpts=MONTH_ORDER.map(m=>`<option value="${m} 2026">${m.charAt(0)+m.slice(1).toLowerCase()} 2026</option>`).join('');
+  const selMonths=getOpsNopsSelMonths();
+  const monthChecks=MONTH_ORDER.map(m=>{
+    const full=m+' 2026';
+    return `<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0;font-size:12px;cursor:pointer"><input type="checkbox" ${selMonths.includes(full)?'checked':''} onchange="toggleOpsNopsMonth('${full}',this.checked)"> ${m.charAt(0)+m.slice(1).toLowerCase()}</label>`;
+  }).join('');
   container.innerHTML=`<div class="calc-panel" style="margin-bottom:16px">
     <div class="calc-panel-title">⚡ Análise Ops vs Não-Ops — Upload do arquivo</div>
-    <div class="calc-month-row">
-      <label>Mês de referência:</label>
-      <select id="opsNopsMonthSel">${monthOpts}</select>
-      <span style="font-size:11px;color:var(--muted)">Usado quando o arquivo não tem coluna "Mês"</span>
+    <div class="calc-month-row" style="flex-direction:column;align-items:flex-start;gap:6px">
+      <label>Meses a importar (marque um ou vários):</label>
+      <div>${monthChecks}</div>
+      <div style="font-size:11px;color:var(--muted)">
+        <a href="#" onclick="setAllOpsNopsMonths(true);return false" style="color:var(--purple)">Marcar todos</a> ·
+        <a href="#" onclick="setAllOpsNopsMonths(false);return false" style="color:var(--purple)">Limpar</a> —
+        Nenhum marcado = importa todos os meses do arquivo (ou o mês atual, se o arquivo não tiver coluna "Mês"). Sem coluna "Mês", marque só um.
+      </div>
     </div>
     <div class="calc-files" style="grid-template-columns:1fr">
       <div class="calc-file-zone ${hasData?'loaded':''}" onclick="openOpsNopsUpload('${email}')">
@@ -3768,12 +3795,6 @@ function renderOpsNopsPanel(email){
       :`<button class="btn-calc" disabled>📊 Carregar arquivo para visualizar</button>
         <span style="font-size:11px;color:var(--muted);margin-left:12px">Carregue o arquivo para gerar o relatório</span>`}
   </div>`;
-  const mSel=document.getElementById('opsNopsMonthSel');
-  if(mSel){
-    const def=_opsNopsRefMes||(()=>{const m=MONTH_ORDER;return m[new Date().getMonth()]+' 2026';})();
-    mSel.value=def;
-    mSel.addEventListener('change',function(){_opsNopsRefMes=this.value;});
-  }
 }
 
 function renderOpsNopsSection(email){
